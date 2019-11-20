@@ -1,0 +1,2 @@
+# github.com/apparentlymart/go-cidr v1.0.1
+github.com/apparentlymart/go-cidr/cidr
