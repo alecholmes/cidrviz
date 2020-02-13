@@ -31,11 +31,13 @@ func main() {
 
 	var names []string
 	var boundaries []cidrBoundary
-	for name, c := range namedSubnets {
+	for name, subnets := range namedSubnets {
 		names = append(names, name)
-		from, to := cidr.AddressRange(c)
-		boundaries = append(boundaries, cidrBoundary{ip: from, start: true})
-		boundaries = append(boundaries, cidrBoundary{ip: to, start: false})
+		for _, subnet := range subnets {
+			from, to := cidr.AddressRange(subnet)
+			boundaries = append(boundaries, cidrBoundary{ip: from, start: true})
+			boundaries = append(boundaries, cidrBoundary{ip: to, start: false})
+		}
 	}
 
 	sort.Strings(names)
@@ -58,7 +60,23 @@ func main() {
 			continue
 		}
 
-		// if start is not adjacent to last ip
+		printIPRow := func(ip net.IP) {
+			for _, name := range names {
+				containsIP := false
+				for _, subnet := range namedSubnets[name] {
+					if subnet.Contains(ip) {
+						containsIP = true
+						break
+					}
+				}
+				if containsIP {
+					fmt.Printf("%s", name)
+				} else {
+					fmt.Printf("-")
+				}
+			}
+		}
+
 		if printGaps && i > 0 && boundary.start {
 			lastBoundary := big.NewInt(0).SetBytes(boundaries[i-1].ip)
 			currBoundary := big.NewInt(0).SetBytes(boundary.ip)
@@ -66,33 +84,19 @@ func main() {
 			if distance > 1 {
 				betweenIP := net.IP(big.NewInt(0).Add(lastBoundary, big.NewInt(1)).Bytes())
 				fmt.Printf("                ")
-				for _, name := range names {
-					c := namedSubnets[name]
-					if c.Contains(betweenIP) {
-						fmt.Printf("%s", name)
-					} else {
-						fmt.Printf("-")
-					}
-				}
+				printIPRow(betweenIP)
 				fmt.Printf(" (%d IPs)", distance-1)
 				fmt.Println("")
 			}
 		}
 
 		fmt.Printf("%-15s ", boundary.ip)
-		for _, name := range names {
-			c := namedSubnets[name]
-			if c.Contains(boundary.ip) {
-				fmt.Printf("%s", name)
-			} else {
-				fmt.Printf("-")
-			}
-		}
+		printIPRow(boundary.ip)
 		fmt.Println("")
 	}
 }
 
-func parseArgsOrExit() (bool, map[string]*net.IPNet) {
+func parseArgsOrExit() (bool, map[string][]*net.IPNet) {
 	noGaps := flag.Bool("no-gaps", false, "if true, skips printing gaps between non-adjacent subnets")
 
 	flag.Parse()
@@ -106,7 +110,7 @@ func parseArgsOrExit() (bool, map[string]*net.IPNet) {
 		errAndExit("No arguments given")
 	}
 
-	subnets := make(map[string]*net.IPNet)
+	subnets := make(map[string][]*net.IPNet)
 	for _, arg := range flag.Args() {
 		matches := argRegexp.FindAllStringSubmatch(arg, -1)
 		if len(matches) == 0 {
@@ -122,11 +126,7 @@ func parseArgsOrExit() (bool, map[string]*net.IPNet) {
 			errAndExit(fmt.Sprintf("Invalid CIDR format: %s", rawCIDR))
 		}
 
-		if _, ok := subnets[name]; ok {
-			errAndExit(fmt.Sprintf("Multiple arguments with same name: %s", name))
-		}
-
-		subnets[name] = cidr
+		subnets[name] = append(subnets[name], cidr)
 	}
 
 	return !*noGaps, subnets
