@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
 	"regexp"
@@ -20,36 +21,68 @@ var (
 	argRegexp = regexp.MustCompile("^([a-zA-Z0-9]+)=(.+)$")
 )
 
-func main() {
-	namedSubnets := parseArgsOrExit()
+type cidrBoundary struct {
+	ip    net.IP
+	start bool
+}
 
-	ipMap := make(map[string]bool)
-	var ips []net.IP
-	putIP := func(ip net.IP) {
-		if _, ok := ipMap[ip.String()]; !ok {
-			ipMap[ip.String()] = true
-			ips = append(ips, ip)
-		}
-	}
+func main() {
+	printGaps, namedSubnets := parseArgsOrExit()
 
 	var names []string
+	var boundaries []cidrBoundary
 	for name, c := range namedSubnets {
 		names = append(names, name)
-		a, b := cidr.AddressRange(c)
-		putIP(a)
-		putIP(b)
+		from, to := cidr.AddressRange(c)
+		boundaries = append(boundaries, cidrBoundary{ip: from, start: true})
+		boundaries = append(boundaries, cidrBoundary{ip: to, start: false})
 	}
 
-	sort.Slice(ips, func(i, j int) bool {
-		return bytes.Compare(ips[i], ips[j]) < 0
+	sort.Strings(names)
+	sort.Slice(boundaries, func(i, j int) bool {
+		if cmp := bytes.Compare(boundaries[i].ip, boundaries[j].ip); cmp != 0 {
+			return cmp < 0
+		}
+		return boundaries[i].start
 	})
 
-	sort.Strings(names)
-	for _, ip := range ips {
-		fmt.Printf("%-15s ", ip)
+	count := 0
+	for i, boundary := range boundaries {
+		if boundary.start {
+			count++
+		} else {
+			count--
+		}
+
+		if i > 0 && bytes.Compare(boundaries[i-1].ip, boundary.ip) == 0 {
+			continue
+		}
+
+		// if start is not adjacent to last ip
+		if printGaps && i > 0 && boundary.start {
+			lastBoundary := big.NewInt(0).SetBytes(boundaries[i-1].ip)
+			currBoundary := big.NewInt(0).SetBytes(boundary.ip)
+			distance := big.NewInt(0).Sub(currBoundary, lastBoundary).Int64()
+			if distance > 1 {
+				betweenIP := net.IP(big.NewInt(0).Add(lastBoundary, big.NewInt(1)).Bytes())
+				fmt.Printf("                ")
+				for _, name := range names {
+					c := namedSubnets[name]
+					if c.Contains(betweenIP) {
+						fmt.Printf("%s", name)
+					} else {
+						fmt.Printf("-")
+					}
+				}
+				fmt.Printf(" (%d IPs)", distance-1)
+				fmt.Println("")
+			}
+		}
+
+		fmt.Printf("%-15s ", boundary.ip)
 		for _, name := range names {
 			c := namedSubnets[name]
-			if c.Contains(ip) {
+			if c.Contains(boundary.ip) {
 				fmt.Printf("%s", name)
 			} else {
 				fmt.Printf("-")
@@ -59,7 +92,9 @@ func main() {
 	}
 }
 
-func parseArgsOrExit() map[string]*net.IPNet {
+func parseArgsOrExit() (bool, map[string]*net.IPNet) {
+	noGaps := flag.Bool("no-gaps", false, "if true, skips printing gaps between non-adjacent subnets")
+
 	flag.Parse()
 
 	errAndExit := func(message string) {
@@ -94,5 +129,5 @@ func parseArgsOrExit() map[string]*net.IPNet {
 		subnets[name] = cidr
 	}
 
-	return subnets
+	return !*noGaps, subnets
 }
